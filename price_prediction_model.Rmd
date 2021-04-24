@@ -1,0 +1,172 @@
+---
+title: "House Price Prediction Model"
+author: "R.S. Sisodiya"
+date: "4/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE,message=FALSE,results='hide'}
+library(dplyr)
+library(tidyr) 
+library(tidyverse)
+library(ggplot2)
+library(purrr)
+library(caTools)
+library(fastDummies)
+library(caret)
+library(naivebayes)
+```
+# Importing Dataset
+```{r}
+setwd("C:/Users/Admin/Desktop/PRACTICAL/PricePredict")
+df=read.csv("C:/Users/Admin/Desktop/PRACTICAL/PricePredict/Bengaluru_House_Data.csv")
+dim(df)
+summary(df)
+```
+
+# Data Cleaning
+## Dealing with NA value
+```{r warning=FALSE}
+df1=select(df,location ,size,total_sqft,bath,price )
+View(head(df1))
+sum(is.na(df1$bath))
+dim(df1)
+df2=filter(df1,bath != 0)
+sum(is.na(df2$bath))
+dim(df2)
+View(head(df2))
+summary(df2)
+df3=df2 %>%
+  mutate(.,bhk=gsub("BHK","",as.character(.$size))) %>%
+  mutate(.,bhk=gsub("Bedroom","",as.character(.$bhk))) %>%
+  mutate(.,bhk=gsub("RK","",as.character(.$bhk)))
+df3$bhk=as.numeric(as.character(df3$bhk))
+class(df3$bhk)
+```
+## Feature Engineering
+```{r warning=FALSE}
+class(df3$total_sqft)
+#there are some values for total_sqft column in which are in intervals like '2000-3000'. I will replace those values by their mean
+df3$total_sqft = strsplit(as.character(df3$total_sqft)," ")
+View(head(df3))
+m=function(x){
+  return((as.numeric(x[1])+as.numeric(x[3]))/2)
+}
+dim(df3)
+
+for (i in (1:13247)){
+  if(length(df3$total_sqft[[i]])==3){
+    df3$total_sqft[i]=m(df3$total_sqft[[i]])
+  } else if(length(df3$total_sqft[[i]])==2){
+    df3$total_sqft[i]=0
+  }
+}
+View(head(df3))
+df4 = df3 %>%
+  filter(.,total_sqft!=0)
+
+dim(df4)
+df4$total_sqft=as.numeric(as.character(df4$total_sqft))
+class(df4$total_sqft)
+summary(df4)
+```
+
+# Outlier detection and Removal
+```{r warning=FALSE}
+filter(df4,bath>20)
+df4$price_per_sqft=100000*df4$price/df4$total_sqft
+View(df4)
+summary(setNames(as.data.frame(table(df4$location)),c("location","count")))
+location_stats=df4%>%
+  group_by(location)%>%
+  summarise(n=n())%>%
+  arrange(desc(n))              
+location_stats=data.frame(location_stats)
+```
+# Reduction of Dimension
+
+```{r}
+#now the unique locations which are repeated less than 1o times will considered as "other"
+head(count(df4,location,sort=T))
+location_stats_less_than = filter(location_stats,n<=10)
+d1=(df4$location)
+s1=(location_stats_less_than$location)
+for (i in d1) {
+  if(i %in% s1){
+    d1[d1==i]="Other"
+  }
+}
+df4$location=d1
+head(df4,10)
+summary(df4)
+# the usual size per bedroom is 300 sqft.
+head(filter(df4,total_sqft/bhk<300))
+# we can see that the house with 6 bhk have only 1020 sqft area which seems doubtful.
+# we will remove such outliers which have bhk area less than 300 sqft.  
+df5=filter(df4,total_sqft/bhk>=300)
+dim(df5)
+summary(df5$price_per_sqft)
+m=mean(df5$price_per_sqft);st=sd(df5$price_per_sqft);
+m_st1=(m+st);m_st2=(m-st);
+df6=filter(df5,price_per_sqft<=m_st1 & price_per_sqft>=m_st2)
+dim(df6)
+summary(df6)
+
+ 
+# ggplot(bhk2_3,aes(x=total_sqft,y=price))+
+#   geom_point(aes(color=bhk))
+scatter_plot=function(x,loc){
+  bhk2=filter(x,location==loc & bhk==2)
+  bhk3=filter(x,location==loc & bhk==3)
+  cbhk=rbind(bhk2,bhk3)
+  ggplot(cbhk,aes(total_sqft,price))+
+    geom_point(aes(color=bhk,size=1))+
+    ggtitle(loc)+
+    xlab("Total sqft Area")+
+    ylab("Price in Lakh")
+    
+ } 
+scatter_plot(df6,'Hebbal')
+df7=read.csv("C:/Users/Admin/Desktop/PRACTICAL/PricePredict/df7.csv")
+View(head(df7))
+df8=subset(df7,select = -Unnamed..0)
+dim(df7)
+dim(df8)
+scatter_plot(df6,'Rajaji Nagar')
+scatter_plot(df8,'Rajaji Nagar')
+scatter_plot(df6,'Hebbal')
+scatter_plot(df8,'Hebbal')
+scatter_plot(df6,'Kengeri')
+scatter_plot(df8,'Kengeri')
+```
+
+```{r}
+hist(df8$bath,xlab = 'No. of Bathroom',col="blue",main="count")
+hist(df8$price_per_sqft,xlab = 'price per sqft',col="pink4",main="count")
+df9=subset(df8,select= -c(price_per_sqft,size))
+df10=dummy_cols(df9)
+dim(df10)
+View(head(df10))
+df11=subset(df10,select = -location_Other)
+df12=subset(df11,select = -location)
+View(head(df12))
+```
+# Model Building
+
+```{r}
+
+set.seed(123)
+sample = sample.split(df12$price, SplitRatio = 0.7)
+train_set = subset(df12, sample == TRUE)
+test_set  = subset(df12, sample == FALSE)
+dim(train_set)
+dim(test_set)
+fit=lm(price~bhk+bath+total_sqft,train_set)
+head(predict(fit,test_set))
+summary(fit)
+
+```
